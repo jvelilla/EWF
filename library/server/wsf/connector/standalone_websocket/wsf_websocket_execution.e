@@ -2,7 +2,7 @@ note
 	description: "[
 			Request execution based on attributes `request' and `response'.
 			Also support Upgrade to Websocket protocol.
-			
+
 
 		]"
 	author: "$Author$"
@@ -29,6 +29,7 @@ feature -- Execution
 			ws_h: like new_websocket_handler
 		do
 			create ws.make (request, response)
+			initialize_websocket_options (ws)
 			ws.open_ws_handshake
 			if ws.is_websocket then
 				if ws.has_error then
@@ -49,6 +50,18 @@ feature -- Execution
 			-- getting data from `request'
 			-- and response to client via `response'.
 		deferred
+		end
+
+feature -- WebSocket Options
+
+	initialize_websocket_options (ws: WEB_SOCKET)
+			-- Set web socket options (extensions) to be used as part of the ws opem handshake
+			--| for example set pcme algorithm etc.
+			--| Other option is create a new Class WEB_SOCKET_OPTION/ or
+			--| WEB_SOCKET_EXTENTIONS
+			--| defining all potenial extensions to the protocol.
+		do
+			-- To be redefined
 		end
 
 feature -- Factory

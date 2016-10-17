@@ -44,6 +44,11 @@ feature {NONE} -- Initialization
 			end
 		end
 
+	set_pcme_deflate
+		do
+
+		end
+
 feature -- Access		
 
 	socket: HTTPD_STREAM_SOCKET
@@ -114,6 +119,14 @@ feature -- Element change
 			verbose_level := lev
 		end
 
+	mark_pcme_supported
+			-- Set the websocket to handle pcme.
+		do
+			is_pcme_supported := True
+		ensure
+			pmce_supported_true: is_pcme_supported
+		end
+
 feature -- Basic operation
 
 	put_error (a_message: READABLE_STRING_8)
@@ -142,10 +155,13 @@ feature -- Basic Operation
 			--    Host: server.example.com
 			--    Upgrade: websocket
 			--    Connection: Upgrade
+			--!   Sec-WebSocket-Extensions:permessage-deflate; client_max_window_bits
 			--    Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
 			--    Origin: http://example.com
 			--    Sec-WebSocket-Protocol: chat, superchat
 			--    Sec-WebSocket-Version: 13
+		note
+			EIS: "name=Compression Extensions for WebSocket", "src=https://tools.ietf.org/html/draft-ietf-hybi-permessage-compression-28", "protocol=url"
 		local
 			l_sha1: SHA1
 			l_key : STRING
@@ -155,6 +171,7 @@ feature -- Basic Operation
 				-- Reset values.
 			is_websocket := False
 			has_error := False
+			on_handshake:= True
 
 				-- Local cache.
 			req := request
@@ -184,9 +201,20 @@ feature -- Basic Operation
 					l_version_key.is_case_insensitive_equal ("13") and then
 					attached req.http_host -- Host header must be present
 				then
+						-- here we can check for Sec-WebSocket-Extensions, it could be a collection of extensions.
+					if is_pcme_supported and then attached req.meta_string_variable ("HTTP_SEC_WEBSOCKET_EXTENSIONS") as l_ws_extension then
+							-- at the moment we only handle web socket compression extension (PMCE permessage-deflate).
+							--| We need a way to define which compression algorithm the server support.
+							--|
+						handle_extensions (l_ws_extension)
+					end
 					if is_verbose then
 						log ("key " + l_ws_key, debug_level)
 					end
+						--! Before to send  the response we need to check the Sec-Web-Socket extension.
+						--! We can write the compression extension here or just build
+						--! a set of classes and call them where it's needed.
+
 						-- Sending the server's opening handshake
 					create l_sha1.make
 					l_sha1.update_from_string (l_ws_key + magic_guid)
@@ -194,6 +222,13 @@ feature -- Basic Operation
 					res.header.add_header_key_value ("Upgrade", "websocket")
 					res.header.add_header_key_value ("Connection", "Upgrade")
 					res.header.add_header_key_value ("Sec-WebSocket-Accept", l_key)
+
+						-- Sec-WebSocket-Extensions
+					if is_pcme_supported and then attached accepted_offer as l_offer
+						and then attached extension_response(l_offer) as l_extension_response
+					then
+						res.header.add_header_key_value ("Sec-WebSocket-Extensions", l_extension_response)
+					end
 
 					if is_verbose then
 						log ("%N================> Send Handshake", debug_level)
@@ -228,14 +263,25 @@ feature -- Response!
 			l_message_count: INTEGER
 			n: NATURAL_64
 			retried: BOOLEAN
+			l_message: STRING_8
+			l_opcode: NATURAL_32
 		do
+			l_message := a_message
+			if attached accepted_offer and then not on_handshake then
+				l_message := compress_string (l_message)
+			end
 			debug ("ws")
 				print (">>do_send (..., "+ opcode_name (a_opcode) +", ..)%N")
 			end
 			if not retried then
 				create l_header_message.make_empty
-				l_header_message.append_code ((0x80 | a_opcode).to_natural_32)
-				l_message_count := a_message.count
+				if attached accepted_offer and then not on_handshake then
+					l_opcode := (0x80 | a_opcode).to_natural_32
+					l_header_message.append_code ((l_opcode.bit_xor (0b1000000)))
+				else
+					l_header_message.append_code ((0x80 | a_opcode).to_natural_32)
+				end
+				l_message_count := l_message.count
 				n := l_message_count.to_natural_64
 				if l_message_count > 0xffff then
 						--! Improve. this code needs to be checked.
@@ -259,7 +305,7 @@ feature -- Response!
 
 				l_chunk_size := 16_384 -- 16K TODO: see if we should make it customizable.
 				if l_message_count < l_chunk_size then
-					socket.put_string (a_message)
+					socket.put_string (l_message)
 				else
 					from
 						i := 0
@@ -269,7 +315,7 @@ feature -- Response!
 						debug ("ws")
 							print ("Sending chunk " + (i + 1).out + " -> " + (i + l_chunk_size).out +" / " + l_message_count.out + "%N")
 						end
-						l_chunk := a_message.substring (i + 1, l_message_count.min (i + l_chunk_size))
+						l_chunk := l_message.substring (i + 1, l_message_count.min (i + l_chunk_size))
 						socket.put_string (l_chunk)
 						if l_chunk.count < l_chunk_size then
 							l_chunk_size := 0
@@ -285,7 +331,7 @@ feature -- Response!
 			end
 		rescue
 			retried := True
-			io.put_string ("Internal error in " + generator + ".do_send (conn, a_opcode=" + a_opcode.out + ", a_message) !%N")
+			io.put_string ("Internal error in " + generator + ".do_send (conn, a_opcode=" + a_opcode.out + ", l_message) !%N")
 			retry
 		end
 
@@ -341,6 +387,7 @@ feature -- Response!
 			s: STRING
 			is_data_frame_ok: BOOLEAN -- Is the last process data framing ok?
 			retried: BOOLEAN
+			l_frame_rsv: INTEGER
 		do
 			if not retried then
 				l_socket := socket
@@ -368,6 +415,7 @@ feature -- Response!
 						end
 						l_fin := l_byte & (0b10000000) /= 0
 						l_rsv := l_byte & (0b01110000) = 0
+						l_frame_rsv := (l_byte & 0x70) |>> 4
 						l_opcode := l_byte & 0b00001111
 						if Result /= Void then
 							if l_opcode = Result.opcode then
@@ -402,7 +450,15 @@ feature -- Response!
 							end
 
 								-- rsv validation
-							if not l_rsv then
+		            	    if l_frame_rsv /= 0 then
+		                	    if attached accepted_offer and then l_frame_rsv = 4 then
+		                	    	if Result.is_continuation then
+		                	    		Result.report_error (protocol_error, "RSV is set and no extension is negotiated")
+		                	    	else
+		                	    		on_handshake := False
+		                	    		Result.update_rsv1 (True)
+		                	    	end
+		                       	elseif not l_rsv then
 									-- RSV1, RSV2, RSV3:  1 bit each
 
 									-- MUST be 0 unless an extension is negotiated that defines meanings
@@ -412,7 +468,8 @@ feature -- Response!
 									-- Connection_
 
 									-- FIXME: add support for extension ?
-								Result.report_error (protocol_error, "RSV values MUST be 0 unless an extension is negotiated that defines meanings for non-zero values")
+									Result.report_error (protocol_error, "RSV values MUST be 0 unless an extension is negotiated that defines meanings for non-zero values")
+								end
 							end
 						else
 							if is_verbose then
@@ -538,7 +595,13 @@ feature -- Response!
 														end
 													end
 													l_fetch_count := l_fetch_count + l_bytes_read
-													Result.append_payload_data_chop (l_chunk, l_bytes_read, l_remaining_len = 0)
+
+													if attached accepted_offer then
+															-- Uncompress data.
+														Result.append_payload_data_chop (uncompress_string (l_chunk), l_bytes_read, l_remaining_len = 0)
+													else
+														Result.append_payload_data_chop (l_chunk, l_bytes_read, l_remaining_len = 0)
+													end
 												else
 													Result.report_error (internal_error, "Issue reading payload data...")
 												end
@@ -792,7 +855,166 @@ feature {NONE} -- Debug
 		end
 
 
-note
+feature -- PCME
+
+	uncompress_string (a_string: STRING): STRING
+		local
+			di: ZLIB_STRING_UNCOMPRESS
+			l_string: STRING
+			l_array: ARRAY [NATURAL_8]
+			l_byte: SPECIAL [INTEGER_8]
+		do
+			create l_string.make_from_string (a_string)
+				--Prepend 0x78 and 09c
+			l_string.prepend_character ((156).to_character_8)
+			l_string.prepend_character ((120).to_character_8)
+
+			 	-- Append 4 octects 0x00 0x00 0xff 0xff to the tail of the paiload message
+			l_string.append_character ((0x00).to_character_8)
+			l_string.append_character ((0x00).to_character_8)
+			l_string.append_character ((0xff).to_character_8)
+			l_string.append_character ((0xff).to_character_8)
+
+			l_array := string_to_array (l_string)
+			l_byte := byte_array (l_array)
+
+
+
+
+			create di.string_stream (l_string)
+			Result := di.to_string
+			debug ("ws")
+				print ("%NBytes uncompresses:" + di.total_bytes_uncompressed.out)
+				print ("%NUncompress message:" + Result)
+			end
+		end
+
+	compress_string (a_string: STRING): STRING
+			local
+				dc: ZLIB_STRING_COMPRESS
+				l_string: STRING
+			do
+				create Result.make_empty
+				create dc.string_stream (Result)
+				dc.mark_sync_flush
+				dc.put_string (a_string)
+
+				Result := Result.substring (3, Result.count - 4)
+
+				debug ("ws")
+					print ("%NBytes uncompresses:" + dc.total_bytes_compressed.out )
+				end
+			end
+
+
+	byte_array (a_bytes: SPECIAL [NATURAL_8]) : SPECIAL [INTEGER_8]
+		local
+			i: INTEGER
+		do
+
+			create Result.make_filled (0,a_bytes.count)
+			across a_bytes as c
+				loop
+   					Result.put(to_byte(c.item.as_integer_8), i)
+					i := i + 1
+				end
+		end
+
+	to_byte (a_val : INTEGER) : INTEGER_8
+			-- takes a value between 0 and 255
+			-- Result :-128 to 127
+		do
+			if a_val >= 128 then
+				Result := (-256 + a_val).to_integer_8
+			else
+				Result := a_val.to_integer_8
+			end
+		ensure
+			result_value :  127 >= Result and Result >= -128
+		end
+
+
+
+	string_to_array (s: STRING): ARRAY [NATURAL_8]
+		local
+			i, n: INTEGER
+			c: INTEGER
+		do
+			n := s.count
+			create Result.make_empty
+			if n > 0 then
+				from
+					i := 1
+				until
+					i > n
+				loop
+					c := s [i].code
+					check
+						c <= 0xFF
+					end
+					Result.force (c.as_natural_8, i)
+					i := i + 1
+				end
+			end
+		end
+
+
+feature {NONE} -- Extensions
+
+	is_pcme_supported: BOOLEAN
+			--| Temporary hack to test websocket compression
+
+	on_handshake: BOOLEAN
+
+	permessage_compression: STRING = "permessage-deflate"
+			--| Temporary hack to test websocket compression
+
+	extension_response (a_offer: WEBSOCKET_PCME): detachable STRING_8
+		do
+			if attached a_offer.name as l_name then
+				create Result.make_from_string (l_name)
+			end
+		end
+
+	handle_extensions (a_extension: READABLE_STRING_32)
+			--  handle WebSocket extensions.
+		local
+			l_parse: COMPRESSION_EXTENSIONS_PARSER
+			l_offers: LIST [WEBSOCKET_PCME]
+			l_accepted: BOOLEAN
+			l_offer: WEBSOCKET_PCME
+		do
+				-- TODO improve handle
+				-- at the moment only check we have permessage_compression
+				--| TODO add validation and select the best offer.
+
+			create l_parse.make (a_extension)
+			l_parse.parse
+			l_offers := l_parse.last_offers
+			if not l_offers.is_empty then
+					-- filter by permessage-deflate.
+					--| TODO: validate if it's a valid extension.
+					--| validate params.
+				across l_offers as ic
+				until
+					l_accepted
+				loop
+					if attached {STRING_32} ic.item.name as l_name and then
+					   l_name.is_case_insensitive_equal_general (permessage_compression)
+					then
+					   	l_accepted := True
+					   	create l_offer
+					   	l_offer.set_name (permessage_compression)
+					end
+				end
+				accepted_offer := l_offer
+			end
+		end
+
+	accepted_offer: detachable WEBSOCKET_PCME
+			-- Accepted compression extension.	
+
+;note
 	copyright: "2011-2016, Jocelyn Fiat, Javier Velilla, Eiffel Software and others"
 	license: "Eiffel Forum License v2 (see http://www.eiffel.com/licensing/forum.txt)"
 	source: "[

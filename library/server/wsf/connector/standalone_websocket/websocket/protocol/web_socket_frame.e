@@ -93,6 +93,9 @@ feature -- Access
 	is_fin: BOOLEAN
   			-- is the final fragment in a message?
 
+  	is_rsv1: BOOLEAN
+  			-- is extension negotiation in a message?
+
   	fragment_count: INTEGER
 
 	payload_length: NATURAL_64
@@ -130,6 +133,11 @@ feature -- Operation
 	update_fin (a_flag_is_fin: BOOLEAN)
 		do
 			is_fin := a_flag_is_fin
+		end
+
+	update_rsv1 (a_flag_rsv1: BOOLEAN)
+		do
+			is_rsv1 := a_flag_rsv1
 		end
 
 feature {WEB_SOCKET_FRAME} -- Change: injected control frames 			
@@ -434,4 +442,14 @@ feature {NONE} -- Helper
 				end
 			end
 		end
+note
+	copyright: "2011-2016, Jocelyn Fiat, Javier Velilla, Eiffel Software and others"
+	license: "Eiffel Forum License v2 (see http://www.eiffel.com/licensing/forum.txt)"
+	source: "[
+			Eiffel Software
+			5949 Hollister Ave., Goleta, CA 93117 USA
+			Telephone 805-685-1006, Fax 805-685-6869
+			Website http://www.eiffel.com
+			Customer support http://support.eiffel.com
+		]"
 end
