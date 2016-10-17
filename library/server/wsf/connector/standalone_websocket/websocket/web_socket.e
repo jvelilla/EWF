@@ -267,20 +267,20 @@ feature -- Response!
 			l_opcode: NATURAL_32
 		do
 			l_message := a_message
-			if attached accepted_offer and then not on_handshake then
-				l_message := compress_string (l_message)
-			end
+--			if attached accepted_offer and then not on_handshake then
+--				l_message := compress_string (l_message)
+--			end
 			debug ("ws")
 				print (">>do_send (..., "+ opcode_name (a_opcode) +", ..)%N")
 			end
 			if not retried then
 				create l_header_message.make_empty
-				if attached accepted_offer and then not on_handshake then
-					l_opcode := (0x80 | a_opcode).to_natural_32
-					l_header_message.append_code ((l_opcode.bit_xor (0b1000000)))
-				else
+--				if attached accepted_offer and then not on_handshake then
+--					l_opcode := (0x80 | a_opcode).to_natural_32
+--					l_header_message.append_code ((l_opcode.bit_xor (0b1000000)))
+--				else
 					l_header_message.append_code ((0x80 | a_opcode).to_natural_32)
-				end
+--				end
 				l_message_count := l_message.count
 				n := l_message_count.to_natural_64
 				if l_message_count > 0xffff then
@@ -301,31 +301,33 @@ feature -- Response!
 				else
 					l_header_message.append_code (n.as_natural_32)
 				end
-				socket.put_string (l_header_message)
-
-				l_chunk_size := 16_384 -- 16K TODO: see if we should make it customizable.
-				if l_message_count < l_chunk_size then
-					socket.put_string (l_message)
-				else
-					from
-						i := 0
-					until
-						l_chunk_size = 0
-					loop
+				socket.put_string_8_noexception (l_header_message)
+				if not socket.was_error then
+					l_chunk_size := 16_384 -- 16K TODO: see if we should make it customizable.
+					if l_message_count < l_chunk_size then
+						socket.put_string_8_noexception (a_message)
+					else
+						from
+							i := 0
+						until
+							l_chunk_size = 0 or socket.was_error
+						loop
+							debug ("ws")
+								print ("Sending chunk " + (i + 1).out + " -> " + (i + l_chunk_size).out +" / " + l_message_count.out + "%N")
+							end
+							l_chunk := a_message.substring (i + 1, l_message_count.min (i + l_chunk_size))
+							socket.put_string_8_noexception (l_chunk)
+							if l_chunk.count < l_chunk_size then
+								l_chunk_size := 0
+							end
+							i := i + l_chunk_size
+						end
 						debug ("ws")
-							print ("Sending chunk " + (i + 1).out + " -> " + (i + l_chunk_size).out +" / " + l_message_count.out + "%N")
+							print ("Sending chunk done%N")
 						end
-						l_chunk := l_message.substring (i + 1, l_message_count.min (i + l_chunk_size))
-						socket.put_string (l_chunk)
-						if l_chunk.count < l_chunk_size then
-							l_chunk_size := 0
-						end
-						i := i + l_chunk_size
-					end
-					debug ("ws")
-						print ("Sending chunk done%N")
 					end
 				end
+
 			else
 					-- FIXME: what should be done on rescue?
 			end
@@ -598,7 +600,7 @@ feature -- Response!
 
 													if attached accepted_offer then
 															-- Uncompress data.
-														Result.append_payload_data_chop (uncompress_string (l_chunk), l_bytes_read, l_remaining_len = 0)
+--														Result.append_payload_data_chop (uncompress_string (l_chunk), l_bytes_read, l_remaining_len = 0)
 													else
 														Result.append_payload_data_chop (l_chunk, l_bytes_read, l_remaining_len = 0)
 													end
@@ -857,54 +859,54 @@ feature {NONE} -- Debug
 
 feature -- PCME
 
-	uncompress_string (a_string: STRING): STRING
-		local
-			di: ZLIB_STRING_UNCOMPRESS
-			l_string: STRING
-			l_array: ARRAY [NATURAL_8]
-			l_byte: SPECIAL [INTEGER_8]
-		do
-			create l_string.make_from_string (a_string)
-				--Prepend 0x78 and 09c
-			l_string.prepend_character ((156).to_character_8)
-			l_string.prepend_character ((120).to_character_8)
+--	uncompress_string (a_string: STRING): STRING
+--		local
+--			di: ZLIB_STRING_UNCOMPRESS
+--			l_string: STRING
+--			l_array: ARRAY [NATURAL_8]
+--			l_byte: SPECIAL [INTEGER_8]
+--		do
+--			create l_string.make_from_string (a_string)
+--				--Prepend 0x78 and 09c
+--			l_string.prepend_character ((156).to_character_8)
+--			l_string.prepend_character ((120).to_character_8)
 
-			 	-- Append 4 octects 0x00 0x00 0xff 0xff to the tail of the paiload message
-			l_string.append_character ((0x00).to_character_8)
-			l_string.append_character ((0x00).to_character_8)
-			l_string.append_character ((0xff).to_character_8)
-			l_string.append_character ((0xff).to_character_8)
+--			 	-- Append 4 octects 0x00 0x00 0xff 0xff to the tail of the paiload message
+--			l_string.append_character ((0x00).to_character_8)
+--			l_string.append_character ((0x00).to_character_8)
+--			l_string.append_character ((0xff).to_character_8)
+--			l_string.append_character ((0xff).to_character_8)
 
-			l_array := string_to_array (l_string)
-			l_byte := byte_array (l_array)
-
-
+--			l_array := string_to_array (l_string)
+--			l_byte := byte_array (l_array)
 
 
-			create di.string_stream (l_string)
-			Result := di.to_string
-			debug ("ws")
-				print ("%NBytes uncompresses:" + di.total_bytes_uncompressed.out)
-				print ("%NUncompress message:" + Result)
-			end
-		end
 
-	compress_string (a_string: STRING): STRING
-			local
-				dc: ZLIB_STRING_COMPRESS
-				l_string: STRING
-			do
-				create Result.make_empty
-				create dc.string_stream (Result)
-				dc.mark_sync_flush
-				dc.put_string (a_string)
 
-				Result := Result.substring (3, Result.count - 4)
+--			create di.string_stream (l_string)
+--			Result := di.to_string
+--			debug ("ws")
+--				print ("%NBytes uncompresses:" + di.total_bytes_uncompressed.out)
+--				print ("%NUncompress message:" + Result)
+--			end
+--		end
 
-				debug ("ws")
-					print ("%NBytes uncompresses:" + dc.total_bytes_compressed.out )
-				end
-			end
+--	compress_string (a_string: STRING): STRING
+--			local
+--				dc: ZLIB_STRING_COMPRESS
+--				l_string: STRING
+--			do
+--				create Result.make_empty
+--				create dc.string_stream (Result)
+--				dc.mark_sync_flush
+--				dc.put_string (a_string)
+
+--				Result := Result.substring (3, Result.count - 4)
+
+--				debug ("ws")
+--					print ("%NBytes uncompresses:" + dc.total_bytes_compressed.out )
+--				end
+--			end
 
 
 	byte_array (a_bytes: SPECIAL [NATURAL_8]) : SPECIAL [INTEGER_8]
