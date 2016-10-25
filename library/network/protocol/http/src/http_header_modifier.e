@@ -508,9 +508,16 @@ feature -- Others
 
 	put_expires (a_seconds: INTEGER)
 			-- Put "Expires" header to `a_seconds' seconds
+			-- and also "Cache-Control: max-age=.." .
+			-- To be supported by most browser.
+		local
+			dt: DATE_TIME
 		do
-			put_expires_string (a_seconds.out)
-		end
+			create dt.make_now_utc
+			dt.second_add (a_seconds)
+			put_expires_date (dt)
+			put_cache_control ("max-age=" + a_seconds.out)
+		end			
 
 	put_expires_string (a_expires: STRING)
 			-- Put "Expires" header with `a_expires' string value
@@ -542,6 +549,26 @@ feature -- Others
 			-- Put "Pragma" header with "no-cache" a_pragma
 		do
 			put_pragma ("no-cache")
+		end
+
+feature -- Connection		
+
+	put_connection (a_conn: READABLE_STRING_8)
+			-- Put "Connection" header with `a_conn' value.
+		do
+			put_header_key_value ({HTTP_HEADER_NAMES}.header_connection, a_conn)
+		end
+
+	put_connection_keep_alive
+			-- Put "Connection" header with "keep-alive".
+		do
+			put_connection ("keep-alive")
+		end
+
+	put_connection_close
+			-- Put "Connection" header with "close".
+		do
+			put_connection ("close")
 		end
 
 feature -- Redirection
