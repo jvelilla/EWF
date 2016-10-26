@@ -4,7 +4,7 @@ note
 	revision: "$Revision$"
 
 class
-	WEBSOCKET_PCME
+	WEB_SOCKET_PMCE
 
 feature -- Access
 
@@ -13,6 +13,16 @@ feature -- Access
 
  	parameters: detachable STRING_TABLE [detachable STRING_32]
  			-- Compression extensions parameter.
+
+feature -- Status Report
+
+	has (a_key: STRING_32): BOOLEAN
+			-- Is there an item in the table with key `a_key'?
+		do
+			if attached parameters as l_parameters then
+				Result := l_parameters.has (a_key)
+			end
+		end
 
 feature -- Change Element
 

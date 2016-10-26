@@ -114,6 +114,10 @@ feature -- Access
 	error: detachable WEB_SOCKET_ERROR_FRAME
 			-- Describe the type of error
 
+	raw_data_length: NATURAL_64
+	raw_data: detachable STRING_8
+			-- Contains raw data to be uncompressed.
+
 feature -- Access: injected control frames
 
  	injected_control_frames: detachable LIST [WEB_SOCKET_FRAME]
@@ -259,6 +263,7 @@ feature -- Change
 			if is_text then
 				if is_fin and a_flag_chop_complete then
 						-- Check the whole message is a valid UTF-8 string
+						-- iff is not is_rsv1	
 					if attached payload_data as d then
 						if not is_valid_utf_8_string (d) then
 							report_error (invalid_data, "The text message is not a valid UTF-8 text!")
@@ -274,6 +279,20 @@ feature -- Change
 					end
 				end
 			end
+		end
+
+
+	append_raw_data_chop (a_data: STRING_8; a_len: INTEGER; a_flag_chop_complete: BOOLEAN)
+		do
+			if a_flag_chop_complete then
+				increment_fragment_count
+			end
+			if attached raw_data as l_raw_data then
+				l_raw_data.append (a_data)
+			else
+				raw_data := a_data
+			end
+			raw_data_length := raw_data_length + a_len.to_natural_64
 		end
 
 	report_error (a_code: INTEGER; a_description: READABLE_STRING_8)

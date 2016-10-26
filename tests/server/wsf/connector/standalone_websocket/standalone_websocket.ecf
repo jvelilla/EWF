@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<system xmlns="http://www.eiffel.com/developers/xml/configuration-1-16-0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.eiffel.com/developers/xml/configuration-1-16-0 http://www.eiffel.com/developers/xml/configuration-1-16-0.xsd" name="standalone_websocket" uuid="DCC8967B-6B94-439C-AB71-300D41D5AD2E">
+	<target name="standalone_websocket">
+		<root class="APPLICATION" feature="make"/>
+		<option concurrency="scoop" root_concurrency="scoop" warning="true">
+			<assertions precondition="true" postcondition="true" check="true" invariant="true" loop="true" supplier_precondition="true"/>
+		</option>
+		<setting name="console_application" value="true"/>
+		<precompile name="base_pre" location="$ISE_PRECOMP\base-scoop-safe.ecf"/>
+		<library name="base" location="$ISE_LIBRARY\library\base\base-safe.ecf"/>
+		<library name="testing" location="$ISE_LIBRARY\library\testing\testing-safe.ecf"/>
+		<library name="standalone_websocket_connector" location="..\..\..\..\..\library\server\wsf\connector\standalone_websocket-safe.ecf" readonly="false">
+			<option debug="false">
+				<debug name="ws" enabled="true"/>
+			</option>
+		</library>
+		<cluster name="standalone_websocket" location=".\" recursive="true">
+			<file_rule>
+				<exclude>/.svn$</exclude>
+				<exclude>/CVS$</exclude>
+				<exclude>/EIFGENs$</exclude>
+			</file_rule>
+		</cluster>
+	</target>
+</system>

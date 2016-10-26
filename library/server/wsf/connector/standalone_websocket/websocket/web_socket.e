@@ -44,11 +44,6 @@ feature {NONE} -- Initialization
 			end
 		end
 
-	set_pcme_deflate
-		do
-
-		end
-
 feature -- Access		
 
 	socket: HTTPD_STREAM_SOCKET
@@ -119,13 +114,19 @@ feature -- Element change
 			verbose_level := lev
 		end
 
-	mark_pcme_supported
-			-- Set the websocket to handle pcme.
+	configure_pcme (a_pcme_server: WEB_SOCKET_PMCE_DEFLATE_SERVER_SUPPORT)
+			-- Set `pcme_server_support` with `a_pcme_server`.
 		do
-			is_pcme_supported := True
+			pmce_server_support := a_pcme_server
 		ensure
-			pmce_supported_true: is_pcme_supported
+			pcme_server_support_set: pmce_server_support = a_pcme_server
 		end
+
+
+feature -- PMCE Compression
+
+	pmce_server_support : detachable WEB_SOCKET_PMCE_DEFLATE_SERVER_SUPPORT
+		-- Compression extension supported by the server.
 
 feature -- Basic operation
 
@@ -202,7 +203,7 @@ feature -- Basic Operation
 					attached req.http_host -- Host header must be present
 				then
 						-- here we can check for Sec-WebSocket-Extensions, it could be a collection of extensions.
-					if is_pcme_supported and then attached req.meta_string_variable ("HTTP_SEC_WEBSOCKET_EXTENSIONS") as l_ws_extension then
+					if attached pmce_server_support and then attached req.meta_string_variable ("HTTP_SEC_WEBSOCKET_EXTENSIONS") as l_ws_extension then
 							-- at the moment we only handle web socket compression extension (PMCE permessage-deflate).
 							--| We need a way to define which compression algorithm the server support.
 							--|
@@ -224,10 +225,9 @@ feature -- Basic Operation
 					res.header.add_header_key_value ("Sec-WebSocket-Accept", l_key)
 
 						-- Sec-WebSocket-Extensions
-					if is_pcme_supported and then attached accepted_offer as l_offer
-						and then attached extension_response(l_offer) as l_extension_response
+					if attached pmce_server_support and then attached accepted_offer as l_offer
 					then
-						res.header.add_header_key_value ("Sec-WebSocket-Extensions", l_extension_response)
+						res.header.add_header_key_value ("Sec-WebSocket-Extensions", l_offer.extension_response)
 					end
 
 					if is_verbose then
@@ -267,20 +267,20 @@ feature -- Response!
 			l_opcode: NATURAL_32
 		do
 			l_message := a_message
---			if attached accepted_offer and then not on_handshake then
---				l_message := compress_string (l_message)
---			end
+			if attached accepted_offer and then not on_handshake then
+				l_message := compress_string (l_message)
+			end
 			debug ("ws")
 				print (">>do_send (..., "+ opcode_name (a_opcode) +", ..)%N")
 			end
 			if not retried then
 				create l_header_message.make_empty
---				if attached accepted_offer and then not on_handshake then
---					l_opcode := (0x80 | a_opcode).to_natural_32
---					l_header_message.append_code ((l_opcode.bit_xor (0b1000000)))
---				else
+				if attached accepted_offer and then not on_handshake then
+					l_opcode := (0x80 | a_opcode).to_natural_32
+					l_header_message.append_code ((l_opcode.bit_xor (0b1000000)))
+				else
 					l_header_message.append_code ((0x80 | a_opcode).to_natural_32)
---				end
+				end
 				l_message_count := l_message.count
 				n := l_message_count.to_natural_64
 				if l_message_count > 0xffff then
@@ -305,7 +305,7 @@ feature -- Response!
 				if not socket.was_error then
 					l_chunk_size := 16_384 -- 16K TODO: see if we should make it customizable.
 					if l_message_count < l_chunk_size then
-						socket.put_string_8_noexception (a_message)
+						socket.put_string_8_noexception (l_message)
 					else
 						from
 							i := 0
@@ -390,6 +390,7 @@ feature -- Response!
 			is_data_frame_ok: BOOLEAN -- Is the last process data framing ok?
 			retried: BOOLEAN
 			l_frame_rsv: INTEGER
+--			l_ps: PROFILING_SETTING
 		do
 			if not retried then
 				l_socket := socket
@@ -600,7 +601,10 @@ feature -- Response!
 
 													if attached accepted_offer then
 															-- Uncompress data.
---														Result.append_payload_data_chop (uncompress_string (l_chunk), l_bytes_read, l_remaining_len = 0)
+														Result.append_raw_data_chop (l_chunk, l_bytes_read, l_remaining_len = 0)
+														if Result.is_fin and then attached Result.raw_data as l_raw_data then
+															Result.append_payload_data_chop (uncompress_string (l_raw_data), Result.raw_data_length.to_integer_32, l_remaining_len = 0)
+														end
 													else
 														Result.append_payload_data_chop (l_chunk, l_bytes_read, l_remaining_len = 0)
 													end
@@ -859,55 +863,109 @@ feature {NONE} -- Debug
 
 feature -- PCME
 
---	uncompress_string (a_string: STRING): STRING
---		local
---			di: ZLIB_STRING_UNCOMPRESS
---			l_string: STRING
---			l_array: ARRAY [NATURAL_8]
---			l_byte: SPECIAL [INTEGER_8]
---		do
---			create l_string.make_from_string (a_string)
---				--Prepend 0x78 and 09c
---			l_string.prepend_character ((156).to_character_8)
---			l_string.prepend_character ((120).to_character_8)
+	uncompress_string (a_string: STRING): STRING
+		local
+			di: ZLIB_STRING_UNCOMPRESS
+			l_string: STRING
+			l_array: ARRAY [NATURAL_8]
+			l_byte: SPECIAL [INTEGER_8]
+		do
+			create l_string.make_from_string (a_string)
 
---			 	-- Append 4 octects 0x00 0x00 0xff 0xff to the tail of the paiload message
+----			l_array := string_to_array (l_string)
+----			l_byte := byte_array (l_array)
+
+--			-- TODO add logic to compute window size based on extension negotiation.
+
+--			create di.string_stream_with_size (l_string, {WEB_SOCKET_PCME_CONSTANTS}.default_chunk_size)
+
+--				 	-- Append 4 octects 0x00 0x00 0xff 0xff to the tail of the paiload message
 --			l_string.append_character ((0x00).to_character_8)
 --			l_string.append_character ((0x00).to_character_8)
 --			l_string.append_character ((0xff).to_character_8)
 --			l_string.append_character ((0xff).to_character_8)
+--			Result := di.to_string_with_options (-{WEB_SOCKET_PCME_CONSTANTS}.default_window_size)
 
---			l_array := string_to_array (l_string)
---			l_byte := byte_array (l_array)
-
-
-
-
---			create di.string_stream (l_string)
---			Result := di.to_string
 --			debug ("ws")
 --				print ("%NBytes uncompresses:" + di.total_bytes_uncompressed.out)
---				print ("%NUncompress message:" + Result)
 --			end
---		end
+			Result := do_uncompress (a_string)
+		end
 
---	compress_string (a_string: STRING): STRING
---			local
---				dc: ZLIB_STRING_COMPRESS
---				l_string: STRING
---			do
+
+	do_uncompress (a_string: STRING): STRING
+		local
+			di: ZLIB_STRING_UNCOMPRESS
+			l_string: STRING
+		do
+			create l_string.make_from_string (a_string)
+			di := string_uncompress
+			if attached di then
+--				create di.string_stream_with_size (l_string, {WEB_SOCKET_PCME_CONSTANTS}.default_chunk_size)
+				di.set_string (l_string)
+
+						 	-- Append 4 octects 0x00 0x00 0xff 0xff to the tail of the paiload message
+				l_string.append_character ((0x00).to_character_8)
+				l_string.append_character ((0x00).to_character_8)
+				l_string.append_character ((0xff).to_character_8)
+				l_string.append_character ((0xff).to_character_8)
+				Result := di.to_string_with_options (-{WEB_SOCKET_PMCE_CONSTANTS}.default_window_size)
+			else
+				create di.string_stream_with_size(l_string, {WEB_SOCKET_PMCE_CONSTANTS}.default_chunk_size)
+
+					 	-- Append 4 octects 0x00 0x00 0xff 0xff to the tail of the paiload message
+				l_string.append_character ((0x00).to_character_8)
+				l_string.append_character ((0x00).to_character_8)
+				l_string.append_character ((0xff).to_character_8)
+				l_string.append_character ((0xff).to_character_8)
+				Result := di.to_string_with_options (-{WEB_SOCKET_PMCE_CONSTANTS}.default_window_size)
+			end
+		end
+
+	string_uncompress: detachable ZLIB_STRING_UNCOMPRESS
+
+	compress_string (a_string: STRING): STRING
+			local
+				dc: ZLIB_STRING_COMPRESS
+				l_string: STRING
+			do
+
+				debug ("ws")
+					print ("%NBegin compresses:" + a_string.count.out)
+				end
+--				-- TODO add logic to compute window size based on extension negotiation.
 --				create Result.make_empty
---				create dc.string_stream (Result)
+--				create dc.string_stream_with_size (Result, {WEB_SOCKET_PCME_CONSTANTS}.default_chunk_size)
 --				dc.mark_sync_flush
---				dc.put_string (a_string)
+--				dc.put_string_with_options (a_string, {ZLIB_CONSTANTS}.Z_default_compression, -{WEB_SOCKET_PCME_CONSTANTS}.default_window_size, {WEB_SOCKET_PCME_CONSTANTS}.default_value_memory, {ZLIB_CONSTANTS}.z_default_strategy.to_integer_32)
+--				Result := Result.substring (1, Result.count - 4)
 
---				Result := Result.substring (3, Result.count - 4)
+				Result := do_compress (a_string)
 
---				debug ("ws")
---					print ("%NBytes uncompresses:" + dc.total_bytes_compressed.out )
---				end
---			end
+			end
 
+
+	do_compress (a_string: STRING): STRING
+		local
+			dc: ZLIB_STRING_COMPRESS
+		do
+			create Result.make_empty
+			dc := string_compress
+
+			if attached dc then
+				dc.set_string (Result)
+				dc.mark_sync_flush
+				dc.put_string_with_options (a_string, {ZLIB_CONSTANTS}.Z_default_compression, -{WEB_SOCKET_PMCE_CONSTANTS}.default_window_size, 9, {ZLIB_CONSTANTS}.z_default_strategy.to_integer_32)
+				Result := Result.substring (1, Result.count - 4)
+			else
+				create dc.string_stream_with_size(Result, {WEB_SOCKET_PMCE_CONSTANTS}.default_chunk_size)
+				dc.mark_sync_flush
+				dc.put_string_with_options (a_string, {ZLIB_CONSTANTS}.Z_default_compression, -{WEB_SOCKET_PMCE_CONSTANTS}.default_window_size, 9, {ZLIB_CONSTANTS}.z_default_strategy.to_integer_32)
+				Result := Result.substring (1, Result.count - 4)
+			end
+		end
+
+	string_compress: detachable ZLIB_STRING_COMPRESS
 
 	byte_array (a_bytes: SPECIAL [NATURAL_8]) : SPECIAL [INTEGER_8]
 		local
@@ -963,28 +1021,17 @@ feature -- PCME
 
 feature {NONE} -- Extensions
 
-	is_pcme_supported: BOOLEAN
-			--| Temporary hack to test websocket compression
-
 	on_handshake: BOOLEAN
 
-	permessage_compression: STRING = "permessage-deflate"
-			--| Temporary hack to test websocket compression
-
-	extension_response (a_offer: WEBSOCKET_PCME): detachable STRING_8
-		do
-			if attached a_offer.name as l_name then
-				create Result.make_from_string (l_name)
-			end
-		end
 
 	handle_extensions (a_extension: READABLE_STRING_32)
-			--  handle WebSocket extensions.
 		local
-			l_parse: COMPRESSION_EXTENSIONS_PARSER
-			l_offers: LIST [WEBSOCKET_PCME]
+			l_parse: WEB_SOCKET_COMPRESSION_EXTENSIONS_PARSER
+			l_offers: LIST [WEB_SOCKET_PMCE]
 			l_accepted: BOOLEAN
-			l_offer: WEBSOCKET_PCME
+			l_offer:WEB_SOCKET_PMCE_DEFLATE_OFFER
+			l_client_offer: WEB_SOCKET_PMCE_DEFLATE_OFFER
+			l_accept_offer_accept: WEB_SOCKET_PMCE_DEFLATE_ACCEPT_FACTORY
 		do
 				-- TODO improve handle
 				-- at the moment only check we have permessage_compression
@@ -994,26 +1041,22 @@ feature {NONE} -- Extensions
 			l_parse.parse
 			l_offers := l_parse.last_offers
 			if not l_offers.is_empty then
-					-- filter by permessage-deflate.
-					--| TODO: validate if it's a valid extension.
-					--| validate params.
+				create l_accept_offer_accept
 				across l_offers as ic
 				until
 					l_accepted
 				loop
-					if attached {STRING_32} ic.item.name as l_name and then
-					   l_name.is_case_insensitive_equal_general (permessage_compression)
-					then
-					   	l_accepted := True
-					   	create l_offer
-					   	l_offer.set_name (permessage_compression)
+					create l_client_offer.make
+					l_client_offer.configure (ic.item)
+					if attached pmce_server_support as l_server_suppor then
+						accepted_offer := l_accept_offer_accept.accept_offer (l_server_suppor, l_client_offer)
+						l_accepted := attached accepted_offer
 					end
 				end
-				accepted_offer := l_offer
 			end
 		end
 
-	accepted_offer: detachable WEBSOCKET_PCME
+	accepted_offer: detachable WEB_SOCKET_PMCE_DEFLATE_ACCEPT
 			-- Accepted compression extension.	
 
 ;note

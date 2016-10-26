@@ -1,17 +1,14 @@
 note
-	description: "[Object that validate a PMCE permessage defalate extension,  
+	description: "[
+			Object that validate a PMCE permessage defalate extension,  
 			using the DEFLATE algorithm
-			]"
+		]"
 	date: "$Date$"
 	revision: "$Revision$"
 
 class
 	WEB_SOCKET_PMCE_DEFLATE_VALIDATOR
 
-
-feature -- Validate
-
-	
 
 feature -- Access
 
@@ -27,8 +24,8 @@ feature -- Access
 			create Result.make_caseless (4)
 			Result.force (False, "server_no_context_takeover")
 			Result.force (False, "client_no_context_takeover")
-			Result.force (True, "server_max_windows_bits")
-			Result.force (True, "client_max_windows_bits")
+			Result.force (True, "server_max_window_bits")
+			Result.force (True, "client_max_window_bits")
 		end
 
 
