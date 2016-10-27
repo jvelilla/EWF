@@ -265,6 +265,7 @@ feature -- Response!
 			retried: BOOLEAN
 			l_message: STRING_8
 			l_opcode: NATURAL_32
+			l_remaning_len: INTEGER
 		do
 			l_message := a_message
 			if attached accepted_offer and then not on_handshake then
@@ -303,27 +304,36 @@ feature -- Response!
 				end
 				socket.put_string_8_noexception (l_header_message)
 				if not socket.was_error then
-					l_chunk_size := 16_384 -- 16K TODO: see if we should make it customizable.
-					if l_message_count < l_chunk_size then
+					if attached accepted_offer and then not on_handshake then
 						socket.put_string_8_noexception (l_message)
 					else
-						from
-							i := 0
-						until
-							l_chunk_size = 0 or socket.was_error
-						loop
+						l_chunk_size := 0x8000 --16_384 -- 16K TODO: see if we should make it customizable.
+						if l_message_count < l_chunk_size then
+							socket.put_string_8_noexception (l_message)
+						else
+							from
+								i := 0
+							until
+								l_chunk_size = 0 or socket.was_error
+							loop
+								debug ("ws")
+									print ("Sending chunk " + (i + 1).out + " -> " + (i + l_chunk_size).out +" / " + l_message_count.out + "%N")
+								end
+								l_remaning_len := l_message_count - i*l_chunk_size
+								if l_remaning_len < l_chunk_size then
+									l_chunk := a_message.substring (i + 1, l_message_count.min (i + l_remaning_len))
+								else
+									l_chunk := a_message.substring (i + 1, l_message_count.min (i + l_chunk_size))
+								end
+								socket.put_string_8_noexception (l_chunk)
+								if l_chunk.count < l_chunk_size then
+									l_chunk_size := 0
+								end
+								i := i + l_chunk_size
+							end
 							debug ("ws")
-								print ("Sending chunk " + (i + 1).out + " -> " + (i + l_chunk_size).out +" / " + l_message_count.out + "%N")
+								print ("Sending chunk done%N")
 							end
-							l_chunk := a_message.substring (i + 1, l_message_count.min (i + l_chunk_size))
-							socket.put_string_8_noexception (l_chunk)
-							if l_chunk.count < l_chunk_size then
-								l_chunk_size := 0
-							end
-							i := i + l_chunk_size
-						end
-						debug ("ws")
-							print ("Sending chunk done%N")
 						end
 					end
 				end
@@ -563,7 +573,7 @@ feature -- Response!
 											Result.report_error (protocol_error, "All frames sent from client to server are masked!")
 										end
 										if Result.is_valid then
-											l_chunk_size := 0x4000 -- 16 K
+											l_chunk_size := 0x8000 -- 16 K
 											if l_payload_len > {INTEGER_32}.max_value.to_natural_64 then
 													-- Issue .. to big to store in STRING
 													-- FIXME !!!
@@ -602,8 +612,8 @@ feature -- Response!
 													if attached accepted_offer then
 															-- Uncompress data.
 														Result.append_raw_data_chop (l_chunk, l_bytes_read, l_remaining_len = 0)
-														if Result.is_fin and then attached Result.raw_data as l_raw_data then
-															Result.append_payload_data_chop (uncompress_string (l_raw_data), Result.raw_data_length.to_integer_32, l_remaining_len = 0)
+														if Result.is_fin and then attached Result.raw_data as l_raw_data and then l_remaining_len = 0 then
+ 															Result.append_payload_data_chop (uncompress_string (l_raw_data), Result.raw_data_length.to_integer_32, l_remaining_len = 0)
 														end
 													else
 														Result.append_payload_data_chop (l_chunk, l_bytes_read, l_remaining_len = 0)
@@ -875,21 +885,21 @@ feature -- PCME
 ----			l_array := string_to_array (l_string)
 ----			l_byte := byte_array (l_array)
 
---			-- TODO add logic to compute window size based on extension negotiation.
+			-- TODO add logic to compute window size based on extension negotiation.
 
---			create di.string_stream_with_size (l_string, {WEB_SOCKET_PCME_CONSTANTS}.default_chunk_size)
+			create di.string_stream_with_size (l_string, {WEB_SOCKET_PMCE_CONSTANTS}.default_chunk_size)
 
---				 	-- Append 4 octects 0x00 0x00 0xff 0xff to the tail of the paiload message
---			l_string.append_character ((0x00).to_character_8)
---			l_string.append_character ((0x00).to_character_8)
---			l_string.append_character ((0xff).to_character_8)
---			l_string.append_character ((0xff).to_character_8)
---			Result := di.to_string_with_options (-{WEB_SOCKET_PCME_CONSTANTS}.default_window_size)
+				 	-- Append 4 octects 0x00 0x00 0xff 0xff to the tail of the paiload message
+			l_string.append_character ((0x00).to_character_8)
+			l_string.append_character ((0x00).to_character_8)
+			l_string.append_character ((0xff).to_character_8)
+			l_string.append_character ((0xff).to_character_8)
+			Result := di.to_string_with_options (-{WEB_SOCKET_PMCE_CONSTANTS}.default_window_size)
 
---			debug ("ws")
---				print ("%NBytes uncompresses:" + di.total_bytes_uncompressed.out)
---			end
-			Result := do_uncompress (a_string)
+			debug ("ws")
+				print ("%NBytes uncompresses:" + di.total_bytes_uncompressed.out)
+			end
+--			Result := do_uncompress (a_string)
 		end
 
 
@@ -933,14 +943,14 @@ feature -- PCME
 				debug ("ws")
 					print ("%NBegin compresses:" + a_string.count.out)
 				end
---				-- TODO add logic to compute window size based on extension negotiation.
---				create Result.make_empty
---				create dc.string_stream_with_size (Result, {WEB_SOCKET_PCME_CONSTANTS}.default_chunk_size)
---				dc.mark_sync_flush
---				dc.put_string_with_options (a_string, {ZLIB_CONSTANTS}.Z_default_compression, -{WEB_SOCKET_PCME_CONSTANTS}.default_window_size, {WEB_SOCKET_PCME_CONSTANTS}.default_value_memory, {ZLIB_CONSTANTS}.z_default_strategy.to_integer_32)
---				Result := Result.substring (1, Result.count - 4)
+				-- TODO add logic to compute window size based on extension negotiation.
+				create Result.make_empty
+				create dc.string_stream_with_size (Result, {WEB_SOCKET_PMCE_CONSTANTS}.default_chunk_size)
+				dc.mark_full_flush
+				dc.put_string_with_options (a_string, {ZLIB_CONSTANTS}.Z_default_compression, -{WEB_SOCKET_PMCE_CONSTANTS}.default_window_size, {WEB_SOCKET_PMCE_CONSTANTS}.default_value_memory, {ZLIB_CONSTANTS}.z_default_strategy.to_integer_32)
+				Result := Result.substring (1, Result.count - 4)
 
-				Result := do_compress (a_string)
+--				Result := do_compress (a_string)
 
 			end
 

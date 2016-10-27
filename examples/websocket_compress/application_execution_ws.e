@@ -90,6 +90,7 @@ feature -- Websocket execution
 			-- Called after the WebSocket connection is closed.
 		do
 			ws.put_error ("Connection closed")
+			ws.send (Connection_close_frame, "")
 		end
 
 feature -- HTML Resource				

@@ -68,9 +68,9 @@ feature -- Access
 			end
 
 			if accept_client_max_window_bits then
-				Result.append_character (';')
-				Result.append ("client_max_window_bits")
 				if client_max_window_bits > 0 then
+					Result.append_character (';')
+					Result.append ("client_max_window_bits")
 					Result.append_character ('=')
 					Result.append_integer (client_max_window_bits)
 				end
